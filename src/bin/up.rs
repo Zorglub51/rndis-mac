@@ -90,6 +90,21 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
 
 fn main() -> Result<()> {
     let cfg = parse_args()?;
+    // Outer reconnect loop: tolerate the device disappearing/reappearing.
+    loop {
+        match run_once(&cfg) {
+            Ok(()) => {
+                eprintln!("session ended cleanly; waiting 2s before reconnect");
+            }
+            Err(e) => {
+                eprintln!("session error: {e:#}");
+            }
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn run_once(cfg: &Cfg) -> Result<()> {
     let host_ip = cfg.host_ip;
     let peer_ip = cfg.peer_ip;
     let host_mac = cfg.host_mac;

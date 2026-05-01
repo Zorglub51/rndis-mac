@@ -93,9 +93,40 @@ sudo ./target/release/rndis-up \
 ### Why `sudo`?
 
 Only `ifconfig <utun> inet ... up` needs root. The USB and `utun` socket
-opens themselves do not require privileges. If you're packaging this for a
-non-interactive setup, you can pre-create and configure the utun via a
-small privileged helper and run `rndis-up` unprivileged afterwards.
+opens themselves do not require privileges. The packaged LaunchDaemon
+(below) runs as root automatically so you don't have to type `sudo` after
+the initial install.
+
+## Auto-start (LaunchDaemon)
+
+If you want the bridge to come up at boot and survive plug/unplug cycles
+without you running anything by hand:
+
+```
+./packaging/install.sh
+```
+
+That script will:
+
+1. `cargo build --release` if needed,
+2. install the binary to `/usr/local/bin/rndis-up`,
+3. install `com.rndis-mac.plist` to `/Library/LaunchDaemons/`,
+4. `launchctl bootstrap` it.
+
+The daemon is `KeepAlive`, so the binary's internal reconnect loop plus
+launchd's restart-on-exit means: plug in → connection comes up; unplug →
+errors logged and process loops; replug → connection comes back. Logs go
+to `/var/log/rndis-mac.log`.
+
+To use non-default flags, edit `ProgramArguments` in the plist (or in
+`packaging/com.rndis-mac.plist` before installing) and append your
+`--vid` / `--pid` / `--host-ip` / `--peer-ip` / `--host-mac` arguments.
+
+Uninstall:
+
+```
+./packaging/uninstall.sh
+```
 
 ## Diagnostic binaries
 
@@ -135,8 +166,6 @@ src/
   raw L2 (mDNS multicast, DHCP client, etc.) won't traverse the bridge as
   cleanly as a real Ethernet interface would. ARP is handled internally; if
   you need DHCP, build it as a userspace probe inside `up.rs`.
-- **Auto-start on plug-in is not included.** Adding a `LaunchDaemon` plist
-  that does USB matching on the configured VID/PID is a small follow-up.
 - **No IPv6 router-solicitation suppression.** `utun` will emit IPv6 RS
   frames; the daemon forwards them. Generally harmless.
 
