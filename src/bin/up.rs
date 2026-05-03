@@ -90,25 +90,43 @@ fn parse_mac(s: &str) -> Result<[u8; 6]> {
 
 fn main() -> Result<()> {
     let cfg = parse_args()?;
-    // Outer reconnect loop: tolerate the device disappearing/reappearing.
-    loop {
-        match run_once(&cfg) {
-            Ok(()) => {
-                eprintln!("session ended cleanly; waiting 2s before reconnect");
-            }
-            Err(e) => {
-                eprintln!("session error: {e:#}");
+    // Wait for the device to appear, retrying in-process. No per-session state
+    // is allocated yet, so this part is safe to loop on.
+    let max_open_attempts = 30;
+    let session = (|| -> Result<Session> {
+        for attempt in 1..=max_open_attempts {
+            match Session::open(cfg.vid, cfg.pid) {
+                Ok(s) => return Ok(s),
+                Err(e) => {
+                    eprintln!("device not ready (attempt {attempt}): {e:#}");
+                    thread::sleep(Duration::from_secs(2));
+                }
             }
         }
-        thread::sleep(Duration::from_secs(2));
+        // Bail so launchd restarts us with a clean slate rather than spinning
+        // forever in one long-lived process.
+        std::process::exit(2);
+    })()?;
+
+    // Run the session. When it ends — for any reason — exit. launchd's
+    // KeepAlive + ThrottleInterval brings us back with a fresh utun, fresh
+    // USB handles, and no leaked threads. Trying to reuse state inside one
+    // process leaks the utun reader thread (it blocks forever on read),
+    // which keeps the USB device claimed and prevents reconnection.
+    let err = run_once(&cfg, session).err();
+    if let Some(e) = err {
+        eprintln!("session ended: {e:#}");
+    } else {
+        eprintln!("session ended cleanly");
     }
+    std::process::exit(1);
 }
 
-fn run_once(cfg: &Cfg) -> Result<()> {
+fn run_once(cfg: &Cfg, session: Session) -> Result<()> {
     let host_ip = cfg.host_ip;
     let peer_ip = cfg.peer_ip;
     let host_mac = cfg.host_mac;
-    let s = Arc::new(Session::open(cfg.vid, cfg.pid)?);
+    let s = Arc::new(session);
     println!(
         "RNDIS up — device MAC reported as {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         s.mac[0], s.mac[1], s.mac[2], s.mac[3], s.mac[4], s.mac[5]
